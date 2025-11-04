@@ -77,11 +77,13 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
+          AUTHOR_NAME=$(git log -1 --pretty=format:'%an')
+          AUTHOR_EMAIL=$(git log -1 --pretty=format:'%ae')
           payload=$(cat <<'JSON'
           {
-            "text": "[Prod Deploy] orders pushed by @${GITHUB_ACTOR}",
+            "text": "[Prod Deploy] orders pushed by ${AUTHOR_NAME} <${AUTHOR_EMAIL}>",
             "blocks": [
-              { "type": "section", "text": { "type": "mrkdwn", "text": "*[Prod Deploy]* orders pushed by @${GITHUB_ACTOR}" } },
+              { "type": "section", "text": { "type": "mrkdwn", "text": "*[Prod Deploy]* orders pushed by ${AUTHOR_NAME} <${AUTHOR_EMAIL}>" } },
               { "type": "section", "text": { "type": "mrkdwn", "text": "<https://github.com/${REPO}/commit/${SHA}|View Commit>" } },
               { "type": "context", "elements": [ { "type": "mrkdwn", "text": "Version: ${VERSION} — live on EC2" } ] }
             ]
