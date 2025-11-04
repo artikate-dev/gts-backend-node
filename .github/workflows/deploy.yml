@@ -1,0 +1,79 @@
+name: Deploy to EC2 (main)
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      APP_NAME: ${{ vars.APP_NAME }}                 # e.g., gts-backend
+      IMAGE_NAME: ${{ vars.IMAGE_NAME }}            # e.g., artikate/gts-backend-node
+      HOST_PORT: ${{ vars.HOST_PORT }}              # e.g., 80
+      CONTAINER_PORT: ${{ vars.CONTAINER_PORT }}    # e.g., 3000
+      SSH_HOST: ${{ secrets.SSH_HOST }}             # e.g., 54.167.214.66
+      SSH_USER: ${{ secrets.SSH_USER }}             # ubuntu or ec2-user
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute version/tags
+        id: meta
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          VERSION="v${SHORT_SHA}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "image_tag_1=$VERSION" >> $GITHUB_OUTPUT
+          echo "image_tag_2=latest" >> $GITHUB_OUTPUT
+
+      - name: Docker login (Docker Hub)
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build and push image
+        run: |
+          docker build -t "${IMAGE_NAME}:${{ steps.meta.outputs.image_tag_1 }}" -t "${IMAGE_NAME}:${{ steps.meta.outputs.image_tag_2 }}" .
+          docker push "${IMAGE_NAME}:${{ steps.meta.outputs.image_tag_1 }}"
+          docker push "${IMAGE_NAME}:${{ steps.meta.outputs.image_tag_2 }}"
+
+      - name: Add SSH key
+        run: |
+          echo "${{ secrets.SSH_KEY }}" > key.pem
+          chmod 600 key.pem
+
+      - name: Deploy on EC2
+        run: |
+          TAG="${{ steps.meta.outputs.image_tag_1 }}"
+          ssh -i key.pem -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" "
+            set -e
+            docker pull ${IMAGE_NAME}:${TAG}
+            docker rm -f ${APP_NAME} >/dev/null 2>&1 || true
+            docker run -d --name ${APP_NAME} \
+              -p ${HOST_PORT}:${CONTAINER_PORT} \
+              --restart unless-stopped \
+              -e NODE_ENV=production \
+              ${IMAGE_NAME}:${TAG}
+            curl -fsS http://127.0.0.1/health >/dev/null
+          "
+
+      - name: Notify Slack
+        if: success()
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          read -r -d '' payload <<'JSON'
+          {
+            "text": "[Prod Deploy] orders pushed by @${GITHUB_ACTOR}",
+            "blocks": [
+              { "type": "section", "text": { "type": "mrkdwn", "text": "*[Prod Deploy]* orders pushed by @${GITHUB_ACTOR}" } },
+              { "type": "section", "text": { "type": "mrkdwn", "text": "<https://github.com/${REPO}/commit/${SHA}|View Commit>" } },
+              { "type": "context", "elements": [ { "type": "mrkdwn", "text": "Version: ${VERSION} — live on EC2" } ] }
+            ]
+          }
+          JSON
+          curl -X POST -H "Content-type: application/json" --data "$payload" "$SLACK_WEBHOOK_URL"
