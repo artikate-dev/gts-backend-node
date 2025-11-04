@@ -55,7 +55,18 @@ jobs:
               --restart unless-stopped \
               -e NODE_ENV=production \
               ${IMAGE_NAME}:${TAG}
-            curl -fsS http://127.0.0.1/health >/dev/null
+            # wait for app to become healthy (up to ~60s)
+            for i in {1..60}; do
+              if curl -fsS http://127.0.0.1/health >/dev/null; then
+                echo 'App is healthy'
+                exit 0
+              fi
+              sleep 1
+            done
+
+            echo 'Health check failed — showing recent logs:' >&2
+            docker logs --tail=200 ${APP_NAME} >&2
+            exit 1
           "
 
       - name: Notify Slack
