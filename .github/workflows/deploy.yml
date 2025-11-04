@@ -77,7 +77,7 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
-          read -r -d '' payload <<'JSON'
+          payload=$(cat <<'JSON'
           {
             "text": "[Prod Deploy] orders pushed by @${GITHUB_ACTOR}",
             "blocks": [
@@ -87,4 +87,10 @@ jobs:
             ]
           }
           JSON
-          curl -X POST -H "Content-type: application/json" --data "$payload" "$SLACK_WEBHOOK_URL"
+          )
+          status=$(curl -sS -X POST -H "Content-type: application/json" --data "$payload" "$SLACK_WEBHOOK_URL" -w "%{http_code}" -o /tmp/slack.out)
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "Slack webhook failed with status: $status" >&2
+            cat /tmp/slack.out >&2
+            exit 1
+          fi
