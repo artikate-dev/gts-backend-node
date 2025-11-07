@@ -1,0 +1,64 @@
+name: Build, Push, and Deploy to ECS
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: 767397940350.dkr.ecr.ap-south-1.amazonaws.com/gts/node-service
+  IMAGE_TAG: latest
+  ECS_CLUSTER_NAME: gts-node-cluster    
+  ECS_SERVICE_NAME: gts-node-service-task-service-k3742kjc      
+
+
+permissions:
+  id-token: write 
+  contents: read   
+
+jobs:
+  build-and-push:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::767397940350:role/gts-node-service-git-deploy-role 
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        run: |
+          # This runs your 'docker build', 'tag', and 'push' commands
+          docker build -t ${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} .
+          docker push ${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+
+
+  deploy-to-ecs:
+    name: Deploy to ECS Fargate
+    runs-on: ubuntu-latest
+    needs: build-and-push  
+    
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::767397940350:role/gts-node-service-git-deploy-role
+          aws-region: ${{ env.AWS_REGION }}
+          
+      - name: Force new deployment on ECS
+        id: force-deploy
+        run: |
+          echo "Forcing new deployment of service: ${{ env.ECS_SERVICE_NAME }} in cluster: ${{ env.ECS_CLUSTER_NAME }}"
+          
+          aws ecs update-service --cluster ${{ env.ECS_CLUSTER_NAME }} --service ${{ env.ECS_SERVICE_NAME }} --force-new-deployment
