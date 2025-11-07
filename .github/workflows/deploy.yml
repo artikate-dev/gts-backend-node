@@ -79,16 +79,16 @@ jobs:
         run: |
           AUTHOR_NAME=$(git log -1 --pretty=format:'%an')
           AUTHOR_EMAIL=$(git log -1 --pretty=format:'%ae')
-          payload=$(cat <<'JSON'
+          payload=$(cat <<EOF
           {
             "text": "[Prod Deploy] orders pushed by $AUTHOR_NAME <$AUTHOR_EMAIL>",
             "blocks": [
-              { "type": "section", "text": { "type": "mrkdwn", "text": "*[Prod Deploy]* orders pushed by ${AUTHOR_NAME} <${AUTHOR_EMAIL}>" } },
-              { "type": "section", "text": { "type": "mrkdwn", "text": "<https://github.com/${REPO}/commit/${SHA}|View Commit>" } },
-              { "type": "context", "elements": [ { "type": "mrkdwn", "text": "Version: ${VERSION} — live on EC2" } ] }
+              { "type": "section", "text": { "type": "mrkdwn", "text": "*[Prod Deploy]* orders pushed by $AUTHOR_NAME <$AUTHOR_EMAIL>" } },
+              { "type": "section", "text": { "type": "mrkdwn", "text": "<https://github.com/$REPO/commit/$SHA|View Commit>" } },
+              { "type": "context", "elements": [ { "type": "mrkdwn", "text": "Version: $VERSION — live on EC2" } ] }
             ]
           }
-          JSON
+          EOF
           )
           status=$(curl -sS -X POST -H "Content-type: application/json" --data "$payload" "$SLACK_WEBHOOK_URL" -w "%{http_code}" -o /tmp/slack.out)
           if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
