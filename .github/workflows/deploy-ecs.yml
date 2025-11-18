@@ -1,4 +1,4 @@
-name: Build, Push, and Deploy Node Service
+name: Build, Push, and Deploy Node Service..
 
 on:
   push:
