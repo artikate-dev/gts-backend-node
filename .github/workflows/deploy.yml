@@ -69,30 +69,34 @@ jobs:
             exit 1
           "
 
-      - name: Notify Slack
-        if: success()
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
-          GITHUB_ACTOR: ${{ github.actor }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-        run: |
-          AUTHOR_NAME=$(git log -1 --pretty=format:'%an')
-          AUTHOR_EMAIL=$(git log -1 --pretty=format:'%ae')
-          payload=$(cat <<EOF
-          {
-            "text": "[Prod Deploy] orders pushed by $AUTHOR_NAME <$AUTHOR_EMAIL>",
-            "blocks": [
-              { "type": "section", "text": { "type": "mrkdwn", "text": "*[Prod Deploy]* orders pushed by $AUTHOR_NAME <$AUTHOR_EMAIL>" } },
-              { "type": "section", "text": { "type": "mrkdwn", "text": "<https://github.com/$REPO/commit/$SHA|View Commit>" } },
-              { "type": "context", "elements": [ { "type": "mrkdwn", "text": "Version: $VERSION — live on EC2" } ] }
-            ]
-          }
-          EOF
-          )
-          status=$(curl -sS -X POST -H "Content-type: application/json" --data "$payload" "$SLACK_WEBHOOK_URL" -w "%{http_code}" -o /tmp/slack.out)
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            echo "Slack webhook failed with status: $status" >&2
-            cat /tmp/slack.out >&2
-            exit 1
-          fi
+      # - name: Notify Slack
+      #   if: success()
+      #   env:
+      #     VERSION: ${{ steps.meta.outputs.version }}
+      #     GITHUB_ACTOR: ${{ github.actor }}
+      #     REPO: ${{ github.repository }}
+      #     SHA: ${{ github.sha }}
+      #   run: |
+      #     COMMIT_AUTHOR=$(git log -1 --pretty=format:'%an')
+      #     COMMIT_MESSAGE=$(git log -1 --pretty=format:'%s')
+      #     # Escape special JSON characters in the commit message
+      #     COMMIT_MESSAGE=$(echo "$COMMIT_MESSAGE" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/`/\\`/g')
+
+      #     payload=$(cat <<EOF
+      #     {
+      #       "text": "[$APP_NAME] New deployment to production by $COMMIT_AUTHOR",
+      #       "blocks": [
+      #         { "type": "header", "text": { "type": "plain_text", "text": ":rocket: Production Deployment: $APP_NAME" } },
+      #         { "type": "section", "text": { "type": "mrkdwn", "text": "*<$REPO/commit/$SHA|`$VERSION`>* - ${COMMIT_MESSAGE}" } },
+      #         { "type": "context", "elements": [
+      #             { "type": "mrkdwn", "text": "Deployed by *${COMMIT_AUTHOR}*" } ]
+      #         }]
+      #     }
+      #     EOF
+      #     )
+      #     status=$(curl -sS -X POST -H "Content-type: application/json" --data "$payload" "$SLACK_WEBHOOK_URL" -w "%{http_code}" -o /tmp/slack.out)
+      #     if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+      #       echo "Slack webhook failed with status: $status" >&2
+      #       cat /tmp/slack.out >&2
+      #       exit 1
+      #     fi

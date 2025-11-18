@@ -1,64 +1,109 @@
-name: Build, Push, and Deploy to ECS
+name: Build, Push, and Deploy Node Service
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "dev" ]
 
 env:
   AWS_REGION: ap-south-1
-  ECR_REPOSITORY: 767397940350.dkr.ecr.ap-south-1.amazonaws.com/gts/node-service
-  IMAGE_TAG: latest
-  ECS_CLUSTER_NAME: gts-node-cluster    
-  ECS_SERVICE_NAME: gts-node-service-task-service-k3742kjc      
+  ECR_REGISTRY: 767397940350.dkr.ecr.ap-south-1.amazonaws.com
+  ECR_REPOSITORY: gts/node-service 
 
-
+  CONTAINER_NAME: gts-node-container
+  APP_NAME: GTS- Node API
+  IAM_ROLE_ARN: arn:aws:iam::767397940350:role/gts-node-service-git-deploy-role
+  
 permissions:
   id-token: write 
-  contents: read   
+  contents: read  
 
 jobs:
-  build-and-push:
-    name: Build and Push to ECR
+  build-and-deploy:
+    name: Build, Push, and Deploy
     runs-on: ubuntu-latest
+    environment: 
+      name: ${{ github.ref == 'refs/heads/main' && 'production' || 'dev' }}
     
     steps:
+      - name: Set Environment Variables
+        id: set-env
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "IMAGE_TAG=latest" >> $GITHUB_OUTPUT
+            echo "ECS_CLUSTER_NAME=gts-prod-cluster" >> $GITHUB_OUTPUT
+            # UPDATE: Your Node Production Service Name
+            echo "ECS_SERVICE_NAME=gts-node-service-main" >> $GITHUB_OUTPUT
+            # UPDATE: Ensure you have this file in your repo
+            echo "ECS_TASK_DEFINITION=node-task-definition.json" >> $GITHUB_OUTPUT
+
+          elif [ "${{ github.ref }}" == "refs/heads/dev" ]; then
+            echo "IMAGE_TAG=dev" >> $GITHUB_OUTPUT
+            echo "ECS_CLUSTER_NAME=gts-dev-cluster" >> $GITHUB_OUTPUT    
+            # UPDATE: Your Node Dev Service Name
+            echo "ECS_SERVICE_NAME=gts-node-service-dev" >> $GITHUB_OUTPUT 
+            echo "ECS_TASK_DEFINITION=task-definition-dev.json" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::767397940350:role/gts-node-service-git-deploy-role 
+          role-to-assume: ${{ env.IAM_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Log in to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
         
-
       - name: Build, tag, and push image to Amazon ECR
         id: build-image
         run: |
-          # This runs your 'docker build', 'tag', and 'push' commands
-          docker build -t ${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} .
-          docker push ${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          set -e
+          SHORT_SHA=${GITHUB_SHA::7}
+          BRANCH_TAG="${{ steps.set-env.outputs.IMAGE_TAG }}"
 
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$SHORT_SHA .
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$SHORT_SHA $ECR_REGISTRY/$ECR_REPOSITORY:$BRANCH_TAG
 
-  deploy-to-ecs:
-    name: Deploy to ECS Fargate
-    runs-on: ubuntu-latest
-    needs: build-and-push  
-    
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$SHORT_SHA
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$BRANCH_TAG
+
+          IMAGE_DIGEST=$(aws ecr describe-images \
+            --repository-name $ECR_REPOSITORY \
+            --image-ids imageTag=${SHORT_SHA} \
+            --query 'imageDetails[0].imageDigest' --output text)
+
+          # Compose the immutable image reference using digest
+          IMAGE_BY_DIGEST="${ECR_REGISTRY}/${ECR_REPOSITORY}@${IMAGE_DIGEST}"
+
+          echo "image=${IMAGE_BY_DIGEST}" >> $GITHUB_OUTPUT
+          echo "image_tag=${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Render new task definition
+        id: render-task
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          role-to-assume: arn:aws:iam::767397940350:role/gts-node-service-git-deploy-role
-          aws-region: ${{ env.AWS_REGION }}
+          task-definition: ${{ steps.set-env.outputs.ECS_TASK_DEFINITION }}
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
           
-      - name: Force new deployment on ECS
-        id: force-deploy
-        run: |
-          echo "Forcing new deployment of service: ${{ env.ECS_SERVICE_NAME }} in cluster: ${{ env.ECS_CLUSTER_NAME }}"
-          
-          aws ecs update-service --cluster ${{ env.ECS_CLUSTER_NAME }} --service ${{ env.ECS_SERVICE_NAME }} --force-new-deployment
+          environment-variables: |
+            NODE_ENV=${{ steps.set-env.outputs.IMAGE_TAG == 'latest' && 'production' || 'development' }}
+            PORT=3000
+            DB_HOST=${{ secrets.DB_HOST }}
+            DB_USER=${{ secrets.DB_USER }}
+            DB_PASS=${{ secrets.DB_PASS }}
+            DB_NAME=${{ secrets.DB_NAME }}
+            DB_PORT=${{ secrets.DB_PORT }}
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+
+      - name: Deploy new task definition to ECS
+        id: deploy-task
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.render-task.outputs.task-definition }}
+          service: ${{ steps.set-env.outputs.ECS_SERVICE_NAME }}
+          cluster: ${{ steps.set-env.outputs.ECS_CLUSTER_NAME }}
+          wait-for-service-stability: true

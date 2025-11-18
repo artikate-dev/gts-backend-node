@@ -22,7 +22,7 @@ app.get('/', (req, res) => {
   });
 });
 
-app.get('/health', (req, res) => {
+app.get('cart/health', (req, res) => {
   res.status(200).send('OK');
 });
 
