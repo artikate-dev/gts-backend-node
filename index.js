@@ -15,8 +15,8 @@ const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 
-const REDIS_URL = process.env.REDIS_URL;
-const cartRedis = new Redis(REDIS_URL, {
+const REDIS_CART_URL = process.env.REDIS_CART_URL;
+const cartRedis = new Redis(REDIS_CART_URL, {
     keyPrefix: 'cart:', 
     lazyConnect: true 
 });
@@ -25,7 +25,7 @@ const inventoryRedis = new Redis(process.env.REDIS_INVENTORY_URL, {
     readOnly: true 
 });
 
-const pubClient = new Redis(REDIS_URL);
+const pubClient = new Redis(REDIS_CART_URL);
 const subClient = pubClient.duplicate();
 
 const handleRedisError = (err, type) => console.error(`Redis ${type} Error:`, err);
