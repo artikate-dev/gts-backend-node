@@ -1,0 +1,63 @@
+{
+  "family": "gts-node-service-task-dev",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "3072",
+  "executionRoleArn": "arn:aws:iam::767397940350:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::767397940350:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "gts-node-container",
+      "image": "YOUR_IMAGE_URI_WILL_BE_INJECTED_HERE",
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "protocol": "tcp",
+          "name": "gts-node-container-3000-tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "essential": true,
+      "environment": [
+        {
+          "name": "SECRET_KEY",
+          "value": "PLACEHOLDER_SECRET_KEY"
+        },
+        {
+          "name": "DEBUG",
+          "value": "PLACEHOLDER_DEBUG"
+        },
+        {
+          "name": "DATABASE_HOST",
+          "value": "PLACEHOLDER_DATABASE_HOST"
+        },
+        {
+          "name": "DATABASE_NAME",
+          "value": "PLACEHOLDER_DATABASE_NAME"
+        },
+        {
+          "name": "DATABASE_USER",
+          "value": "PLACEHOLDER_DATABASE_USER"
+        },
+        {
+          "name": "DATABASE_PASSWORD",
+          "value": "PLACEHOLDER_DATABASE_PASSWORD"
+        },
+        {
+          "name": "ALLOWED_HOSTS",
+          "value": "PLACEHOLDER_ALLOWED_HOSTS"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/gts-node-service-task-dev",
+          "awslogs-create-group": "true",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
