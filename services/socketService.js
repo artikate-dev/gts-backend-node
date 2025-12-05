@@ -2,8 +2,8 @@ const initializeSocket = (io) => {
   io.on('connection', (socket) => {
     console.log(`User connected: ${socket.id}`);
 
-    socket.on('join_admin', () => {
-      socket.join('admin_notifications');
+    socket.on('join_admin', async() => {
+      await socket.join('admin_notifications');
       console.log(`Socket ${socket.id} joined admin_notifications`);
     });
 

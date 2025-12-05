@@ -7,29 +7,56 @@ const http = require('http');
 const { Server } = require('socket.io');
 const { createAdapter } = require('@socket.io/redis-adapter');
 const Redis = require('ioredis');
+const swaggerJsdoc = require('swagger-jsdoc');
+const path = require('path');
+const swaggerUi = require('swagger-ui-express');
 
-// Import Routes
+const options = {
+  definition: {                 
+    openapi: '3.0.0',
+    info: {
+      title: 'GTS Node Service API',
+      version: '1.0.0',
+      description: 'API docs for GTS Node Service'
+    },
+    servers: [{ url: 'http://localhost:3000' }],
+  },
+  apis: [path.join(__dirname, './routes/**/*.js'), path.join(__dirname, './controllers/**/*.js')]
+};
+
+const swaggerSpec = swaggerJsdoc(options);
+
+
 const cartRoutes = require('./routes/cartRoutes');
 
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
-
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const redisOptions = {
+  lazyConnect: true,
+  retryStrategy(times) {
+    const delay = Math.min(times * 50, 2000);
+    return delay;
+  }
+};
 const REDIS_CART_URL = process.env.REDIS_CART_URL;
-const cartRedis = new Redis(REDIS_CART_URL, {
-    keyPrefix: 'cart:', 
-    lazyConnect: true 
-});
-const inventoryRedis = new Redis(process.env.REDIS_INVENTORY_URL, {
-    lazyConnect: true,
-    readOnly: true 
+const cartRedis = new Redis(process.env.REDIS_CART_URL, {
+  ...redisOptions,
+  keyPrefix: 'cart:'
 });
 
-const pubClient = new Redis(REDIS_CART_URL);
-const subClient = pubClient.duplicate();
+const inventoryRedis = new Redis(process.env.REDIS_INVENTORY_URL, {
+  ...redisOptions,
+  readOnly: true
+});
+
+const pubClient = new Redis(process.env.REDIS_CART_URL, redisOptions);
+const subClient = new Redis(process.env.REDIS_CART_URL, redisOptions);
 
 const handleRedisError = (err, type) => console.error(`Redis ${type} Error:`, err);
 cartRedis.on('error', (err) => handleRedisError(err, 'Data Client'));
+inventoryRedis.on('error', (err) => handleRedisError(err, 'Inventory'));
 pubClient.on('error', (err) => handleRedisError(err, 'Pub Client'));
 subClient.on('error', (err) => handleRedisError(err, 'Sub Client'));
 
@@ -39,10 +66,9 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
     credentials: true
   },
-  adapter: createAdapter(pubClient, subClient)
 });
 
-// Middleware
+
 app.use(helmet());
 app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
 app.use(morgan('combined'));
@@ -55,12 +81,19 @@ app.use((req, res, next) => {
   next();
 });
 
+
+app.use('/cart/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
 app.get('/cart/health', async (req, res) => {
   try {
-    await cartRedis.ping(); 
-    res.status(200).json({ status: 'ok', service: 'gts-cart-service', db: 'redis-connected' });
+    await Promise.all([
+        cartRedis.ping(),
+        pubClient.ping()
+    ]);
+    res.status(200).json({ status: 'ok', service: 'gts-cart-service', db: 'connected' });
   } catch (error) {
-    res.status(503).json({ status: 'error', service: 'gts-cart-service', db: 'redis-disconnected' });
+    console.error('Health check failed:', error);
+    res.status(503).json({ status: 'error', service: 'gts-cart-service', db: 'disconnected' });
   }
 });
 
@@ -75,29 +108,54 @@ app.use((err, req, res, next) => {
 });
 
 const start = async () => {
-    try {
-        await Promise.all([
-            cartRedis.connect(),
-            inventoryRedis.connect()
-        ]);
-        console.log('Connected to Redis for Cart Storage');
-        server.listen(PORT, () => {
-            console.log(`Cart Service running on port ${PORT}`);
-        });
-    } catch (error) {
-        console.error('Failed to start server:', error);
-        process.exit(1);
-    }
+  try {
+    console.log('Starting GTS Cart Service...');
+    await Promise.all([
+      cartRedis.connect(),
+      inventoryRedis.connect(),
+      pubClient.connect(),
+      subClient.connect()
+    ]);
+    console.log('✅ All Redis Clients Connected');
+    io.adapter(createAdapter(pubClient, subClient));
+    console.log('✅ Socket.IO Redis Adapter Configured');
+
+    server.listen(PORT, () => {
+      console.log(`🚀 Cart Service running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
+  }
 };
 
 start();
 
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received. Closing connections...');
-  server.close(() => {
-    cartRedis.quit();
-    pubClient.quit();
-    subClient.quit();
-    process.exit(0);
+const gracefulShutdown = async (signal) => {
+  console.log(`${signal} received. Closing resources...`);
+  server.close(async () => {
+    console.log('HTTP server closed.');
+    try {
+      io.disconnectSockets(); 
+      await Promise.all([
+        cartRedis.quit(),
+        inventoryRedis.quit(),
+        pubClient.quit(),
+        subClient.quit()
+      ]);
+      console.log('Redis connections closed.');  
+      process.exit(0);
+    } catch (err) {
+      console.error('Error during shutdown:', err);
+      process.exit(1);
+    }
   });
-});
+  setTimeout(() => {
+    console.error('Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
