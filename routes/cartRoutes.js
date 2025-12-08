@@ -96,14 +96,34 @@ const cartController = require('../controllers/cartController');
  *   get:
  *     summary: Retrieve the user's shopping cart
  *     tags: [Cart]
- *     description: Fetches the contents of the current user's shopping cart.
+ *     description: Fetches the contents of the current user's shopping cart. You can pass either a userId (for logged-in users) or a guestId (for anonymous/guest carts). If both are provided, userId typically takes precedence.
+ *     parameters:
+ *       - in: query
+ *         name: userId
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         required: false
+ *         description: The authenticated user's ID. When provided, returns the cart for this user.
+ *       - in: query
+ *         name: guestId
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: The guest identifier (for anonymous carts). Used when no userId is present.
  *     responses:
  *       200:
  *         description: The user's cart.
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/Cart' # This now correctly points to the detailed Cart schema
+ *               $ref: '#/components/schemas/Cart'
+ *       400:
+ *         description: Bad Request (invalid IDs)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  *       500:
  *         description: Internal Server Error
  *         content:
@@ -126,6 +146,20 @@ router.get('/', cartController.getCart);
  *         application/json:
  *           schema:
  *             $ref: '#/components/schemas/CartItemInput'
+ *     parameters:
+ *       - in: query
+ *         name: userId
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         required: false
+ *         description: The authenticated user's ID. When provided, returns the cart for this user.
+ *       - in: query
+ *         name: guestId
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: The guest identifier (for anonymous carts). Used when no userId is present.
  *     responses:
  *       200:
  *         description: The added or updated cart item.
@@ -148,6 +182,19 @@ router.post('/', cartController.upsertItem);
  *     tags: [Cart]
  *     description: Deletes an item from the shopping cart using its product ID.
  *     parameters:
+ *       - in: query
+ *         name: userId
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         required: false
+ *         description: The authenticated user's ID. When provided, returns the cart for this user.
+ *       - in: query
+ *         name: guestId
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: The guest identifier (for anonymous carts). Used when no userId is present.
  *       - in: path
  *         name: productId
  *         schema:
@@ -175,16 +222,20 @@ router.delete('/:productId', cartController.removeItem);
  *     summary: Merge a guest cart with a user's cart
  *     tags: [Cart]
  *     description: Merges a temporary guest cart into the authenticated user's cart upon login.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [guestCartId]
- *               guestCartId:
- *                 type: string
- *                 description: The ID of the guest cart to merge.
+ *     parameters:
+ *       - in: query
+ *         name: userId
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         required: false
+ *         description: The authenticated user's ID. When provided, returns the cart for this user.
+ *       - in: query
+ *         name: guestId
+ *         schema:
+ *           type: string
+ *         required: false
+ *         description: The guest identifier (for anonymous carts). Used when no userId is present.
  *     responses:
  *       200:
  *         description: The merged and updated cart.
