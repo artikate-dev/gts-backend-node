@@ -40,25 +40,27 @@ const redisOptions = {
     return delay;
   }
 };
-const REDIS_CART_URL = process.env.REDIS_CART_URL;
-const cartRedis = new Redis(process.env.REDIS_CART_URL, {
+const cartDataClient = new Redis(process.env.REDIS_CART_URL, {
   ...redisOptions,
   keyPrefix: 'cart:'
 });
 
-const inventoryRedis = new Redis(process.env.REDIS_INVENTORY_URL, {
+const inventoryReadClient = new Redis(process.env.REDIS_INVENTORY_URL, {
   ...redisOptions,
   readOnly: true
 });
 
-const pubClient = new Redis(process.env.REDIS_CART_URL, redisOptions);
-const subClient = new Redis(process.env.REDIS_CART_URL, redisOptions);
+const cartPubClient = new Redis(process.env.REDIS_CART_URL, redisOptions);
+const cartSubClient = new Redis(process.env.REDIS_CART_URL, redisOptions);
+
+const inventorySubClient = new Redis(process.env.REDIS_INVENTORY_URL, redisOptions);
 
 const handleRedisError = (err, type) => console.error(`Redis ${type} Error:`, err);
-cartRedis.on('error', (err) => handleRedisError(err, 'Data Client'));
-inventoryRedis.on('error', (err) => handleRedisError(err, 'Inventory'));
-pubClient.on('error', (err) => handleRedisError(err, 'Pub Client'));
-subClient.on('error', (err) => handleRedisError(err, 'Sub Client'));
+cartDataClient.on('error', (err) => handleRedisError(err, 'Cart Data Client'));
+inventoryReadClient.on('error', (err) => handleRedisError(err, 'Inventory Read Client'));
+cartPubClient.on('error', (err) => handleRedisError(err, 'Cart Pub Client'));
+cartSubClient.on('error', (err) => handleRedisError(err, 'Cart Sub Client'));
+inventorySubClient.on('error', (err) => handleRedisError(err, 'Inv Sub Client'));
 
 const io = new Server(server, {
   cors: {
@@ -76,8 +78,8 @@ app.use(express.json());
 
 app.use((req, res, next) => {
   req.io = io;            
-  req.redis = cartRedis;
-  req.inventoryRedis = inventoryRedis;
+  req.redis = cartDataClient;
+  req.inventoryRedis = inventoryReadClient;
   next();
 });
 
@@ -87,8 +89,8 @@ app.use('/cart/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/cart/health', async (req, res) => {
   try {
     await Promise.all([
-        cartRedis.ping(),
-        pubClient.ping()
+        cartDataClient.ping(),
+        cartPubClient.ping()
     ]);
     res.status(200).json({ status: 'ok', service: 'gts-cart-service', db: 'connected' });
   } catch (error) {
@@ -111,14 +113,31 @@ const start = async () => {
   try {
     console.log('Starting GTS Cart Service...');
     await Promise.all([
-      cartRedis.connect(),
-      inventoryRedis.connect(),
-      pubClient.connect(),
-      subClient.connect()
+      cartDataClient.connect(),
+      inventoryReadClient.connect(),
+      cartPubClient.connect(),
+      cartSubClient.connect(),
+      inventorySubClient.connect()
     ]);
     console.log('✅ All Redis Clients Connected');
-    io.adapter(createAdapter(pubClient, subClient));
+    io.adapter(createAdapter(cartPubClient, cartSubClient));
     console.log('✅ Socket.IO Redis Adapter Configured');
+
+    const cartService = new CartService(cartDataClient, inventoryReadClient, io);
+ 
+    await inventorySubClient.subscribe('inventory_updates');
+    console.log('📡 Listening for Django Inventory Updates...');
+
+    inventorySubClient.on('message', (channel, message) => {
+      if (channel === 'inventory_updates') {
+         try {
+            const data = JSON.parse(message);
+            cartService.broadcastStockUpdate(data.variant_id, data.stock);
+         } catch (e) {
+            console.error('Failed to process inventory update:', e.message);
+         }
+      }
+    });
 
     server.listen(PORT, () => {
       console.log(`🚀 Cart Service running on port ${PORT} in ${process.env.NODE_ENV} mode`);
@@ -139,10 +158,11 @@ const gracefulShutdown = async (signal) => {
     try {
       io.disconnectSockets(); 
       await Promise.all([
-        cartRedis.quit(),
-        inventoryRedis.quit(),
-        pubClient.quit(),
-        subClient.quit()
+        cartDataClient.quit(),
+        inventoryReadClient.quit(),
+        cartPubClient.quit(),
+        cartSubClient.quit(),
+        inventorySubClient.quit()
       ]);
       console.log('Redis connections closed.');  
       process.exit(0);
