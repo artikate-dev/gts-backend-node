@@ -12,33 +12,69 @@ const cartController = require('../controllers/cartController');
  * @swagger
  * components:
  *   schemas:
- *     CartItem:
+ *     CartItemInput:
  *       type: object
  *       required:
  *         - productId
- *         - quantity
+ *         - qty
  *       properties:
  *         productId:
  *           type: string
  *           description: The unique identifier of the product.
- *         quantity:
+ *         qty:
  *           type: integer
  *           description: The quantity of the product in the cart.
  *           minimum: 1
+ *     CartItem:
+ *       type: object
+ *       properties:
+ *         productId:
+ *           type: string
+ *         sku:
+ *           type: string
+ *         name:
+ *           type: string
+ *         slug:
+ *           type: string
+ *         image:
+ *           type: string
+ *           format: uri
+ *         price:
+ *           type: string
+ *           description: The price of a single item.
+ *           example: "19.99"
+ *         qty:
+ *           type: integer
+ *         attributes:
+ *           type: object
+ *           additionalProperties: true
+ *           description: Product attributes like size or color.
+ *         updatedAt:
+ *           type: string
+ *           format: date-time
+ *         message:
+ *           type: string
+ *           description: A message related to the item, e.g., if quantity was adjusted.
+ *         max_stock:
+ *           type: integer
+ *           description: The maximum available stock for this item.
  *     Cart:
  *       type: object
  *       properties:
- *         id:
- *           type: string
- *           description: The cart ID.
- *         items:
+ *         cart:
  *           type: array
  *           items:
  *             $ref: '#/components/schemas/CartItem'
- *         totalPrice:
- *           type: number
- *           format: float
- *           description: The total price of all items in the cart.
+ *         messages:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               type:
+ *                 type: string
+ *                 enum: [error, warning, info]
+ *               text:
+ *                 type: string
  *     Error:
  *       type: object
  *       properties:
@@ -63,7 +99,7 @@ const cartController = require('../controllers/cartController');
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/Cart'
+ *               $ref: '#/components/schemas/Cart' # This now correctly points to the detailed Cart schema
  *       500:
  *         description: Internal Server Error
  *         content:
@@ -85,14 +121,14 @@ router.get('/', cartController.getCart);
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/CartItem'
+ *             $ref: '#/components/schemas/CartItemInput'
  *     responses:
  *       200:
- *         description: The updated cart.
+ *         description: The added or updated cart item.
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/Cart'
+ *               $ref: '#/components/schemas/CartItem'
  *       400:
  *         description: Bad Request (e.g., invalid product ID or quantity).
  *       500:
@@ -116,11 +152,13 @@ router.post('/', cartController.upsertItem);
  *         description: The ID of the product to remove.
  *     responses:
  *       200:
- *         description: The updated cart after item removal.
+ *         description: Confirmation of item removal.
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/Cart'
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
  *       500:
  *         description: Internal Server Error.
  */
@@ -139,7 +177,7 @@ router.delete('/:productId', cartController.removeItem);
  *         application/json:
  *           schema:
  *             type: object
- *             properties:
+ *             required: [guestCartId]
  *               guestCartId:
  *                 type: string
  *                 description: The ID of the guest cart to merge.

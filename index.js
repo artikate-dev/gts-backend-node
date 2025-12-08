@@ -53,11 +53,14 @@ const inventoryReadClient = new Redis(process.env.REDIS_INVENTORY_URL, {
 const cartPubClient = new Redis(process.env.REDIS_CART_URL, redisOptions);
 const cartSubClient = new Redis(process.env.REDIS_CART_URL, redisOptions);
 
+const inventorySubClient = new Redis(process.env.REDIS_INVENTORY_URL, redisOptions);
+
 const handleRedisError = (err, type) => console.error(`Redis ${type} Error:`, err);
 cartDataClient.on('error', (err) => handleRedisError(err, 'Cart Data Client'));
 inventoryReadClient.on('error', (err) => handleRedisError(err, 'Inventory Read Client'));
 cartPubClient.on('error', (err) => handleRedisError(err, 'Cart Pub Client'));
 cartSubClient.on('error', (err) => handleRedisError(err, 'Cart Sub Client'));
+inventorySubClient.on('error', (err) => handleRedisError(err, 'Inv Sub Client'));
 
 const io = new Server(server, {
   cors: {
@@ -113,11 +116,28 @@ const start = async () => {
       cartDataClient.connect(),
       inventoryReadClient.connect(),
       cartPubClient.connect(),
-      cartSubClient.connect()
+      cartSubClient.connect(),
+      inventorySubClient.connect()
     ]);
     console.log('✅ All Redis Clients Connected');
     io.adapter(createAdapter(cartPubClient, cartSubClient));
     console.log('✅ Socket.IO Redis Adapter Configured');
+
+    const cartService = new CartService(cartDataClient, inventoryReadClient, io);
+ 
+    await inventorySubClient.subscribe('inventory_updates');
+    console.log('📡 Listening for Django Inventory Updates...');
+
+    inventorySubClient.on('message', (channel, message) => {
+      if (channel === 'inventory_updates') {
+         try {
+            const data = JSON.parse(message);
+            cartService.broadcastStockUpdate(data.variant_id, data.stock);
+         } catch (e) {
+            console.error('Failed to process inventory update:', e.message);
+         }
+      }
+    });
 
     server.listen(PORT, () => {
       console.log(`🚀 Cart Service running on port ${PORT} in ${process.env.NODE_ENV} mode`);
@@ -141,7 +161,8 @@ const gracefulShutdown = async (signal) => {
         cartDataClient.quit(),
         inventoryReadClient.quit(),
         cartPubClient.quit(),
-        cartSubClient.quit()
+        cartSubClient.quit(),
+        inventorySubClient.quit()
       ]);
       console.log('Redis connections closed.');  
       process.exit(0);

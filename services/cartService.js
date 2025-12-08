@@ -2,7 +2,7 @@ const inventoryService = require('./inventoryService');
 
 class CartService {
     constructor(cartRedis, inventoryRedis, io) {
-        this.redis = cartRedis;
+        this.cartRedis = cartRedis;
         this.inventoryRedis = inventoryRedis;
         this.io = io;
     }
@@ -10,7 +10,122 @@ class CartService {
     _getKey(userId, guestId) {
         if (userId) return `cart:user:${userId}`;
         if (guestId) return `cart:guest:${guestId}`;
-        throw new Error('No identifier provided for Cart');
+        throw new Error('Cart requires a User ID or Guest ID');
+    }
+
+    _createCartItem(data) {
+        return {
+            productId: data.productId, 
+            sku: data.sku || 'N/A',
+            name: data.name,
+            slug: data.slug || '',
+            image: data.image || '', 
+            price: parseFloat(data.price).toFixed(2),
+            qty: parseInt(data.qty, 10),
+            attributes: data.attributes || {}, 
+            updatedAt: new Date().toISOString()
+        };
+    }
+
+    async joinProductRooms(socketId, cartItems) {
+        if (!cartItems || cartItems.length === 0) return;
+        const rooms = cartItems.map(item => `product_watch:${item.productId}`);
+        const socket = this.io.sockets.sockets.get(socketId);
+        if (socket) {
+            socket.join(rooms);
+        }
+    }
+
+    async broadcastStockUpdate(productId, newStock) {
+        this.io.to(`product_watch:${productId}`).emit('stock_update', {
+            productId: productId,
+            stock: newStock,
+            timestamp: new Date()
+        });
+        if (newStock < 1) {
+             this.io.to(`product_watch:${productId}`).emit('force_cart_refresh', {
+                 message: 'An item in your cart just went out of stock.'
+             });
+        }
+    }
+
+    async upsertItem(userId, guestId, productData) {
+        const key = this._getKey(userId, guestId);
+        const { productId, qty, name } = productData;
+
+        const { stock } = await inventoryService.checkStock(this.inventoryRedis, productId);
+
+        if (stock < qty) {
+            throw new Error(`Insufficient stock. Only ${stock} available.`);
+        }
+
+        if (stock < 5) {
+            this.io.to('admin_notifications').emit('stock_alert', {
+                type: 'LOW_STOCK',
+                message: `Low stock for ${name} (${productId}): ${stock} remaining.`,
+                timestamp: new Date()
+            });
+        }
+
+        const cartItem = this._createCartItem(productData);
+        await this.cartRedis.hset(key, productId, JSON.stringify(cartItem));
+
+        const ttl = userId ? 604800 : 172800;
+        await this.cartRedis.expire(key, ttl);
+
+        return cartItem;
+    }
+
+    async getCart(userId, guestId) {
+        const key = this._getKey(userId, guestId);
+        const rawCart = await this.cartRedis.hgetall(key);
+        
+        if (Object.keys(rawCart).length === 0) {
+            return { cart: [], messages: [] };
+        }
+
+        const cartItems = [];
+        const variantIds = [];
+        
+        for (const [vId, json] of Object.entries(rawCart)) {
+            try {
+                const item = JSON.parse(json);
+                cartItems.push(item);
+                variantIds.push(vId);
+            } catch (e) {
+                await this.cartRedis.hdel(key, vId);
+            }
+        }
+        const stockMap = await inventoryService.validateBatchStock(this.inventoryRedis, variantIds);
+        
+        const finalCart = [];
+        const messages = [];
+        let hasChanges = false;
+        const pipeline = this.cartRedis.pipeline();
+
+        for (const item of cartItems) {
+            const currentStock = stockMap[item.productId] || 0;
+
+            if (currentStock < 1) {
+                pipeline.hdel(key, item.productId);
+                messages.push({ type: 'error', text: `${item.name} is now out of stock.` });
+                hasChanges = true;
+            } else if (item.qty > currentStock) {
+                item.qty = currentStock;
+                item.message = `Qty adjusted to ${currentStock} (max available).`;
+                pipeline.hset(key, item.productId, JSON.stringify(item));
+                finalCart.push(item);
+                messages.push({ type: 'warning', text: `${item.name} quantity adjusted.` });
+                hasChanges = true;
+            } else {
+                item.max_stock = currentStock;
+                finalCart.push(item);
+            }
+        }
+
+        if (hasChanges) await pipeline.exec();
+
+        return { cart: finalCart, messages };
     }
 
     async mergeCarts(guestId, userId) {
@@ -18,164 +133,64 @@ class CartService {
 
         const guestKey = this._getKey(null, guestId);
         const userKey = this._getKey(userId, null);
+        const [guestRaw, userRaw] = await Promise.all([
+            this.cartRedis.hgetall(guestKey),
+            this.cartRedis.hgetall(userKey)
+        ]);
 
-        const rawGuestCart = await this.redis.hgetall(guestKey);
-        if (Object.keys(rawGuestCart).length === 0) return;
+        if (Object.keys(guestRaw).length === 0) return this.getCart(userId, null);
 
-        const rawUserCart = await this.redis.hgetall(userKey);
+        const mergedMap = {};
+        const allVariantIds = new Set();
 
-        const mergedItems = {};
-        const productIdsToCheck = new Set();
-
-        const parseCart = (raw) => {
-            Object.values(raw).forEach(json => {
+        const hydrate = (rawSource) => {
+            Object.values(rawSource).forEach(json => {
                 try {
                     const item = JSON.parse(json);
-                    if (mergedItems[item.productId]) {
-                        mergedItems[item.productId].qty += item.qty;
+                    if (mergedMap[item.productId]) {
+                        mergedMap[item.productId].qty += item.qty; 
                     } else {
-                        mergedItems[item.productId] = item;
+                        mergedMap[item.productId] = item;
                     }
-                    productIdsToCheck.add(item.productId);
-                } catch (e) {}
+                    allVariantIds.add(item.productId);
+                } catch(e) {}
             });
         };
 
-        parseCart(rawUserCart);
-        parseCart(rawGuestCart);
+        hydrate(userRaw);
+        hydrate(guestRaw);
 
-        const idsArray = Array.from(productIdsToCheck);
+        const idsArray = Array.from(allVariantIds);
         const stockMap = await inventoryService.validateBatchStock(this.inventoryRedis, idsArray);
-
-        const pipeline = this.redis.pipeline();
-
-        for (const productId of idsArray) {
-            const item = mergedItems[productId];
-            const realTimeStock = stockMap[productId] || 0;
-
-            if (realTimeStock < 1) {
-                pipeline.hdel(userKey, productId);
-            } else {
-                if (item.qty > realTimeStock) {
-                    item.qty = realTimeStock;
-                    item.message = `Quantity adjusted to stock limits during merge.`;
-                }
-                item.updatedAt = new Date();
-                pipeline.hset(userKey, productId, JSON.stringify(item));
-            }
-        }
-
-        pipeline.expire(userKey, 86400); 
-        pipeline.del(guestKey);
         
+        const pipeline = this.cartRedis.pipeline();
+
+        idsArray.forEach(vId => {
+            const item = mergedMap[vId];
+            const stock = stockMap[vId] || 0;
+
+            if (stock > 0) {
+                if (item.qty > stock) item.qty = stock;
+                item.updatedAt = new Date().toISOString();
+                pipeline.hset(userKey, vId, JSON.stringify(item));
+            } else {
+                pipeline.hdel(userKey, vId);
+            }
+        });
+
+        pipeline.del(guestKey);
+        pipeline.expire(userKey, 604800); 
         await pipeline.exec();
 
-        return this.getCart(userId, null); 
+        this.io.to(`user:${userId}`).emit('cart_updated', { source: 'merge' });
+
+        return this.getCart(userId, null);
     }
-
-    async getCart(userId, guestId) {
-        const key = this._getKey(userId, guestId);
-        const rawCart = await this.redis.hgetall(key);
-
-        const cartItems = [];
-        const productIds = [];
-
-        for (const [productId, data] of Object.entries(rawCart)) {
-            try {
-                const item = JSON.parse(data);
-                cartItems.push(item);
-                productIds.push(productId);
-            } catch (e) {
-                console.error(`Corrupt data for ${productId}`, e);
-            }
-        }
-
-        if (cartItems.length === 0) {
-            return { cart: [], removedItems: [] };
-        }
-
-        const stockMap = await inventoryService.validateBatchStock(this.inventoryRedis, productIds);
-        
-        const finalCart = [];
-        const outOfStockItems = [];
-        let needsUpdate = false;
-
-        for (const item of cartItems) {
-            const realTimeStock = stockMap[item.productId];
-
-            if (realTimeStock < 1) {
-                await this.redis.hdel(key, item.productId);
-                outOfStockItems.push(item.name);
-                if (userId) {
-                    this.io.to('admin_notifications').emit('stock_alert', {
-                        type: 'AUTO_REMOVAL',
-                        message: `Item '${item.name}' removed from User ${userId}'s cart (Stock: 0).`,
-                        productId: item.productId,
-                        userId: userId,
-                        timestamp: new Date()
-                    });
-                }
-            } 
-            else if (item.qty > realTimeStock) {
-                item.qty = realTimeStock;
-                item.stockAvailable = realTimeStock;
-                item.message = `Quantity reduced to ${realTimeStock} (Max available)`;
-
-                await this.redis.hset(key, item.productId, JSON.stringify(item));
-                
-                finalCart.push(item);
-            } 
-            else {
-                item.stockAvailable = realTimeStock;
-                finalCart.push(item);
-            }
-        }
-
-        return { 
-            cart: finalCart, 
-            removedItems: outOfStockItems 
-        };
-    }
-
-    async upsertItem(userId, guestId, productData) {
-        const { productId, qty, name, price } = productData;
-        const key = this._getKey(userId, guestId);
-
-        const { stock } = await inventoryService.checkStock(this.inventoryRedis, productId);
-
-        if (stock < qty) {
-            throw new Error(`Insufficient stock for ${name}. Available: ${stock}`);
-        }
-
-        if (stock < 5) {
-            this.io.to('admin_notifications').emit('stock_alert', {
-                type: 'LOW_STOCK',
-                message: `Product '${name}' (${productId}) is running low! Only ${stock} left.`,
-                productId: productId,
-                timestamp: new Date()
-            });
-        }
-
-        const cartItem = { 
-            productId, 
-            qty, 
-            name, 
-            price, 
-            updatedAt: new Date() 
-        };
-
-        await this.redis.hset(key, productId, JSON.stringify(cartItem));
-
-        const ttl = userId ? 604800 : 172800; 
-        await this.redis.expire(key, ttl);
-        
-        return cartItem;
-    }
-
+    
     async removeItem(userId, guestId, productId) {
         const key = this._getKey(userId, guestId);
-        await this.redis.hdel(key, productId);
-        return { message: 'Item removed' };
+        await this.cartRedis.hdel(key, productId);
+        return { success: true };
     }
 }
 
