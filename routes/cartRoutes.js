@@ -39,9 +39,13 @@ const cartController = require('../controllers/cartController');
  *         image:
  *           type: string
  *           format: uri
- *         price:
+ *         regular_price:
  *           type: string
- *           description: The price of a single item.
+ *           description: The regular price of a single item.
+ *           example: "19.99"
+ *         sale_price:
+ *           type: string
+ *           description: The sale price of a single item.
  *           example: "19.99"
  *         qty:
  *           type: integer

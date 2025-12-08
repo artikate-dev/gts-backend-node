@@ -10,6 +10,7 @@ const Redis = require('ioredis');
 const swaggerJsdoc = require('swagger-jsdoc');
 const path = require('path');
 const swaggerUi = require('swagger-ui-express');
+const CartService = require('./services/cartService');
 
 const options = {
   definition: {                 

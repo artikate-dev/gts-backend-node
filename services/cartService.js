@@ -20,7 +20,8 @@ class CartService {
             name: data.name,
             slug: data.slug || '',
             image: data.image || '', 
-            price: parseFloat(data.price).toFixed(2),
+            regular_price: parseFloat(data.regular_price).toFixed(2),
+            sale_price: parseFloat(data.sale_price).toFixed(2) || null,
             qty: parseInt(data.qty, 10),
             attributes: data.attributes || {}, 
             updatedAt: new Date().toISOString()
