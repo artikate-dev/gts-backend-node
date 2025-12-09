@@ -1,4 +1,5 @@
 const inventoryService = require('./inventoryService');
+const CartItem = require('../models/CartItem');
 
 class CartService {
     constructor(cartRedis, inventoryRedis, io) {
@@ -22,8 +23,11 @@ class CartService {
             image: data.image || '', 
             regular_price: parseFloat(data.regular_price).toFixed(2),
             sale_price: parseFloat(data.sale_price).toFixed(2) || null,
+            discount: data.discount || 0,
+            is_digital: data.is_digital || false,
             qty: parseInt(data.qty, 10),
-            attributes: data.attributes || {}, 
+            attributes: data.attributes || {},
+            addedAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
         };
     }
@@ -52,6 +56,8 @@ class CartService {
 
     async upsertItem(userId, guestId, productData) {
         const key = this._getKey(userId, guestId);
+
+        const cartItem = new CartItem(productData);
         const { productId, qty, name } = productData;
 
         const { stock } = await inventoryService.checkStock(this.inventoryRedis, productId);
@@ -68,7 +74,6 @@ class CartService {
             });
         }
 
-        const cartItem = this._createCartItem(productData);
         await this.cartRedis.hset(key, productId, JSON.stringify(cartItem));
 
         const ttl = userId ? 604800 : 172800;
@@ -114,8 +119,9 @@ class CartService {
             } else if (item.qty > currentStock) {
                 item.qty = currentStock;
                 item.message = `Qty adjusted to ${currentStock} (max available).`;
+                const updatedItem = new CartItem({ ...item, qty: currentStock }); 
                 pipeline.hset(key, item.productId, JSON.stringify(item));
-                finalCart.push(item);
+                finalCart.push(updatedItem);
                 messages.push({ type: 'warning', text: `${item.name} quantity adjusted.` });
                 hasChanges = true;
             } else {
@@ -151,7 +157,7 @@ class CartService {
                     if (mergedMap[item.productId]) {
                         mergedMap[item.productId].qty += item.qty; 
                     } else {
-                        mergedMap[item.productId] = item;
+                        mergedMap[item.productId] = new CartItem(item);
                     }
                     allVariantIds.add(item.productId);
                 } catch(e) {}

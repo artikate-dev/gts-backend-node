@@ -47,12 +47,21 @@ const cartController = require('../controllers/cartController');
  *           type: string
  *           description: The sale price of a single item.
  *           example: "19.99"
+ *         discount:
+ *           type: number
+ *           description: The discount applied to the item.
+ *         is_digital:
+ *           type: boolean
+ *           description: Indicates if the product is a digital item.
  *         qty:
  *           type: integer
  *         attributes:
  *           type: object
  *           additionalProperties: true
  *           description: Product attributes like size or color.
+ *         createdAt:
+ *           type: string
+ *           format: date-time
  *         updatedAt:
  *           type: string
  *           format: date-time
