@@ -14,24 +14,6 @@ class CartService {
         throw new Error('Cart requires a User ID or Guest ID');
     }
 
-    _createCartItem(data) {
-        return {
-            productId: data.productId, 
-            sku: data.sku || 'N/A',
-            name: data.name,
-            slug: data.slug || '',
-            image: data.image || '', 
-            regular_price: parseFloat(data.regular_price).toFixed(2),
-            sale_price: parseFloat(data.sale_price).toFixed(2) || null,
-            discount: data.discount || 0,
-            is_digital: data.is_digital || false,
-            qty: parseInt(data.qty, 10),
-            attributes: data.attributes || {},
-            addedAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-        };
-    }
-
     async joinProductRooms(socketId, cartItems) {
         if (!cartItems || cartItems.length === 0) return;
         const rooms = cartItems.map(item => `product_watch:${item.productId}`);
