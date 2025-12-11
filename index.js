@@ -11,6 +11,17 @@ const swaggerJsdoc = require('swagger-jsdoc');
 const path = require('path');
 const swaggerUi = require('swagger-ui-express');
 const CartService = require('./services/cartService');
+const initializeSocket = require('./services/socketService');
+const cartRoutes = require('./routes/cartRoutes');
+const validateAndAttachIdentity = require('./middlewares/validateIds');
+
+const redisOptions = {
+  lazyConnect: true,
+  retryStrategy(times) {
+    const delay = Math.min(times * 50, 2000);
+    return delay;
+  }
+};
 
 const options = {
   definition: {                 
@@ -24,36 +35,23 @@ const options = {
   },
   apis: [path.join(__dirname, './routes/**/*.js'), path.join(__dirname, './controllers/**/*.js')]
 };
-
 const swaggerSpec = swaggerJsdoc(options);
-
-
-const cartRoutes = require('./routes/cartRoutes');
 
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
-const redisOptions = {
-  lazyConnect: true,
-  retryStrategy(times) {
-    const delay = Math.min(times * 50, 2000);
-    return delay;
-  }
-};
+
 const cartDataClient = new Redis(process.env.REDIS_CART_URL, {
   ...redisOptions,
   keyPrefix: 'cart:'
 });
-
 const inventoryReadClient = new Redis(process.env.REDIS_INVENTORY_URL, {
   ...redisOptions,
   readOnly: true
 });
-
 const cartPubClient = new Redis(process.env.REDIS_CART_URL, redisOptions);
 const cartSubClient = new Redis(process.env.REDIS_CART_URL, redisOptions);
-
 const inventorySubClient = new Redis(process.env.REDIS_INVENTORY_URL, redisOptions);
 
 const handleRedisError = (err, type) => console.error(`Redis ${type} Error:`, err);
@@ -71,21 +69,16 @@ const io = new Server(server, {
   },
 });
 
-
 app.use(helmet());
 app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
 app.use(morgan('combined'));
 app.use(express.json());
-
 app.use((req, res, next) => {
   req.io = io;            
   req.redis = cartDataClient;
   req.inventoryRedis = inventoryReadClient;
   next();
 });
-
-const validateIdentifiers = require('./middlewares/validateIds');
-app.use(validateIdentifiers);
 
 app.get('/debug', (req, res) => {
     res.sendFile(path.join(__dirname, 'views/debug.html'));
@@ -106,9 +99,8 @@ app.get('/cart/health', async (req, res) => {
   }
 });
 
-app.use('/cart', cartRoutes);
+app.use('/cart', validateAndAttachIdentity, cartRoutes);
 
-const initializeSocket = require('./services/socketService');
 initializeSocket(io);
 
 app.use((err, req, res, next) => {

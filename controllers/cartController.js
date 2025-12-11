@@ -1,14 +1,8 @@
 const CartService = require('../services/cartService');
 
-const getIdentifiers = (req) => {
-  const userId = (req.user ? req.user.id : req.params.userId) || null;
-  const guestId = req.headers['x-guest-id'] || req.body.guestId || req.params.guestId || null;
-  return { userId, guestId };
-};
-
 exports.getCart = async (req, res, next) => {
   try {
-    const { userId, guestId } = getIdentifiers(req);
+    const { userId, guestId } = req.identity;
     const cartService = new CartService(req.redis, req.inventoryRedis, req.io);
     const cartData = await cartService.getCart(userId, guestId);
     res.status(200).json(cartData);
@@ -19,7 +13,7 @@ exports.getCart = async (req, res, next) => {
 
 exports.upsertItem = async (req, res, next) => {
   try {
-    const { userId, guestId } = getIdentifiers(req);
+    const { userId, guestId } = req.identity;
     const productData = req.body; 
     if (!productData.productId || !productData.qty) {
       return res.status(400).json({ error: 'productId and qty are required.' });
@@ -37,7 +31,7 @@ exports.upsertItem = async (req, res, next) => {
 
 exports.removeItem = async (req, res, next) => {
   try {
-    const { userId, guestId } = getIdentifiers(req);
+    const { userId, guestId } = req.identity;
     const { productId } = req.params;
     const cartService = new CartService(req.redis, req.inventoryRedis, req.io);
     const result = await cartService.removeItem(userId, guestId, productId);
