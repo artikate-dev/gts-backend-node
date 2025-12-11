@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GTS Cart Socket Debugger</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        .log-entry { font-family: 'Courier New', Courier, monospace; }
+        /* JSON syntax highlighting */
+        .key { color: #8b5cf6; } /* violet */
+        .string { color: #10b981; } /* emerald */
+        .number { color: #f59e0b; } /* amber */
+        .boolean { color: #3b82f6; } /* blue */
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 h-screen flex flex-col font-sans">
+
+    <header class="bg-gray-800 p-4 border-b border-gray-700 flex justify-between items-center">
+        <h1 class="text-xl font-bold text-blue-400">⚡ GTS Cart Service <span class="text-gray-400 text-sm font-normal">Socket Debugger</span></h1>
+        <div class="flex items-center gap-2">
+            <span id="connectionStatus" class="px-3 py-1 rounded-full text-xs font-bold bg-red-900 text-red-200">DISCONNECTED</span>
+            <span id="transportType" class="hidden px-3 py-1 rounded-full text-xs bg-gray-700 text-gray-300"></span>
+        </div>
+    </header>
+
+    <div class="flex flex-1 overflow-hidden">
+        
+        <aside class="w-1/3 min-w-[350px] bg-gray-800 p-4 overflow-y-auto border-r border-gray-700 flex flex-col gap-6">
+            
+            <div class="space-y-3">
+                <h2 class="text-sm uppercase tracking-wider text-gray-500 font-bold">Connection</h2>
+                <div>
+                    <label class="block text-xs mb-1 text-gray-400">Server URL</label>
+                    <input type="text" id="serverUrl" value="http://localhost:3000" class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-sm focus:border-blue-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs mb-1 text-gray-400">Auth/Handshake (JSON)</label>
+                    <textarea id="authPayload" rows="2" class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-sm font-mono focus:border-blue-500 outline-none">{ "token": "optional_token" }</textarea>
+                </div>
+                <div class="flex gap-2">
+                    <button onclick="connectSocket()" id="btnConnect" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-2 rounded text-sm font-semibold transition">Connect</button>
+                    <button onclick="disconnectSocket()" id="btnDisconnect" class="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded text-sm font-semibold transition hidden">Disconnect</button>
+                </div>
+            </div>
+
+            <hr class="border-gray-700">
+
+            <div class="space-y-3">
+                <h2 class="text-sm uppercase tracking-wider text-gray-500 font-bold">Emit Event</h2>
+                <p class="text-xs text-gray-400">Use this to join rooms if your <code>socketService.js</code> requires a specific event.</p>
+                <div>
+                    <label class="block text-xs mb-1 text-gray-400">Event Name</label>
+                    <input type="text" id="emitName" placeholder="e.g. join_room" class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-sm focus:border-blue-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-xs mb-1 text-gray-400">Data (JSON)</label>
+                    <textarea id="emitData" rows="3" class="w-full bg-gray-900 border border-gray-700 rounded p-2 text-sm font-mono focus:border-blue-500 outline-none">{ "productId": "123" }</textarea>
+                </div>
+                <button onclick="emitEvent()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded text-sm font-semibold transition">Emit</button>
+            </div>
+
+            <hr class="border-gray-700">
+
+            <div class="space-y-3">
+                <h2 class="text-sm uppercase tracking-wider text-gray-500 font-bold">Common Scenarios</h2>
+                <div class="grid grid-cols-2 gap-2">
+                    <button onclick="fillJoinAdmin()" class="bg-gray-700 hover:bg-gray-600 p-2 rounded text-xs">Join Admin Room</button>
+                    <button onclick="fillJoinProduct()" class="bg-gray-700 hover:bg-gray-600 p-2 rounded text-xs">Join Product Watch</button>
+                </div>
+            </div>
+
+        </aside>
+
+        <main class="flex-1 flex flex-col bg-gray-900">
+            <div class="p-2 bg-gray-800 border-b border-gray-700 flex justify-between items-center">
+                <h2 class="text-sm font-bold text-gray-300">Live Logs</h2>
+                <button onclick="clearLogs()" class="text-xs text-gray-400 hover:text-white underline">Clear Logs</button>
+            </div>
+            <div id="logs" class="flex-1 overflow-y-auto p-4 space-y-2">
+                <div class="text-gray-500 text-sm italic">Waiting for connection...</div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        let socket;
+
+        // --- Socket Logic ---
+
+        function connectSocket() {
+            const url = document.getElementById('serverUrl').value;
+            let auth = {};
+            try {
+                auth = JSON.parse(document.getElementById('authPayload').value);
+            } catch (e) {
+                log('system', 'Invalid JSON in Auth payload', 'error');
+                return;
+            }
+
+            if (socket) socket.disconnect();
+
+            log('system', `Attempting connection to ${url}...`);
+
+            socket = io(url, {
+                auth: auth,
+                transports: ['websocket', 'polling'], // Try websocket first
+                withCredentials: true
+            });
+
+            // Connection Events
+            socket.on('connect', () => {
+                updateStatus(true);
+                log('success', `Connected! ID: ${socket.id}`);
+                document.getElementById('transportType').innerText = socket.io.engine.transport.name;
+                document.getElementById('transportType').classList.remove('hidden');
+
+                // Listen for transport upgrades
+                socket.io.engine.on('upgrade', () => {
+                    const upgradedTransport = socket.io.engine.transport.name;
+                    document.getElementById('transportType').innerText = upgradedTransport;
+                    log('system', `Transport upgraded to: ${upgradedTransport}`);
+                });
+            });
+
+            socket.on('disconnect', (reason) => {
+                updateStatus(false);
+                log('error', `Disconnected: ${reason}`);
+            });
+
+            socket.on('connect_error', (error) => {
+                updateStatus(false);
+                log('error', `Connection Error: ${error.message}`);
+            });
+
+            // --- GTS Specific Listeners ---
+
+            // 1. Stock Updates (from Redis inventory_updates)
+            socket.on('stock_update', (data) => {
+                log('event', '📦 stock_update', 'info', data);
+            });
+
+            // 2. Forced Cart Refresh (Stock went to 0)
+            socket.on('force_cart_refresh', (data) => {
+                log('event', '⚠️ force_cart_refresh', 'warning', data);
+            });
+
+            // 3. Admin Alerts (Low Stock)
+            socket.on('stock_alert', (data) => {
+                log('event', '🚨 stock_alert', 'error', data);
+            });
+
+            // 4. User Merge/Update
+            socket.on('cart_updated', (data) => {
+                log('event', '🛒 cart_updated', 'success', data);
+            });
+
+            // Catch-all for any other event
+            socket.onAny((eventName, ...args) => {
+                const known = ['stock_update', 'force_cart_refresh', 'stock_alert', 'cart_updated'];
+                if (!known.includes(eventName)) {
+                    log('event', `Unknown Event: ${eventName}`, 'default', args);
+                }
+            });
+        }
+
+        function disconnectSocket() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+            }
+        }
+
+        function emitEvent() {
+            if (!socket || !socket.connected) {
+                alert('Please connect first');
+                return;
+            }
+            const name = document.getElementById('emitName').value;
+            let data;
+            try {
+                data = JSON.parse(document.getElementById('emitData').value);
+            } catch (e) {
+                log('system', 'Invalid JSON in Emit Data', 'error');
+                return;
+            }
+
+            log('outgoing', `⬆️ Emitting: ${name}`, 'default', data);
+            socket.emit(name, data);
+        }
+
+        // --- UI Helpers ---
+
+        function updateStatus(connected) {
+            const statusEl = document.getElementById('connectionStatus');
+            const btnConnect = document.getElementById('btnConnect');
+            const btnDisconnect = document.getElementById('btnDisconnect');
+
+            if (connected) {
+                statusEl.innerText = 'CONNECTED';
+                statusEl.className = 'px-3 py-1 rounded-full text-xs font-bold bg-green-900 text-green-200';
+                btnConnect.classList.add('hidden');
+                btnDisconnect.classList.remove('hidden');
+            } else {
+                statusEl.innerText = 'DISCONNECTED';
+                statusEl.className = 'px-3 py-1 rounded-full text-xs font-bold bg-red-900 text-red-200';
+                btnConnect.classList.remove('hidden');
+                btnDisconnect.classList.add('hidden');
+                document.getElementById('transportType').classList.add('hidden');
+            }
+        }
+
+        function log(type, title, style = 'default', data = null) {
+            const logs = document.getElementById('logs');
+            const entry = document.createElement('div');
+            
+            let borderColor = 'border-gray-700';
+            let titleColor = 'text-gray-300';
+
+            if (style === 'success') { borderColor = 'border-green-600'; titleColor = 'text-green-400'; }
+            if (style === 'error') { borderColor = 'border-red-600'; titleColor = 'text-red-400'; }
+            if (style === 'warning') { borderColor = 'border-orange-500'; titleColor = 'text-orange-400'; }
+            if (style === 'info') { borderColor = 'border-blue-500'; titleColor = 'text-blue-400'; }
+
+            const time = new Date().toLocaleTimeString();
+
+            let html = `
+                <div class="log-entry bg-gray-800 border-l-4 ${borderColor} p-3 rounded shadow-sm text-sm">
+                    <div class="flex justify-between mb-1">
+                        <span class="font-bold ${titleColor}">${title}</span>
+                        <span class="text-gray-500 text-xs">${time}</span>
+                    </div>
+            `;
+
+            if (data) {
+                html += `<pre class="mt-2 bg-gray-900 p-2 rounded overflow-x-auto text-xs text-gray-300">${syntaxHighlight(data)}</pre>`;
+            }
+
+            html += `</div>`;
+            entry.innerHTML = html;
+            logs.appendChild(entry);
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function syntaxHighlight(json) {
+            if (typeof json !== 'string') {
+                json = JSON.stringify(json, undefined, 2);
+            }
+            json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+                var cls = 'number';
+                if (/^"/.test(match)) {
+                    if (/:$/.test(match)) {
+                        cls = 'key';
+                    } else {
+                        cls = 'string';
+                    }
+                } else if (/true|false/.test(match)) {
+                    cls = 'boolean';
+                } else if (/null/.test(match)) {
+                    cls = 'null';
+                }
+                return '<span class="' + cls + '">' + match + '</span>';
+            });
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        // --- Scenarios based on your code ---
+        
+        function fillJoinAdmin() {
+            // NOTE: Replace 'join_room' with whatever event your socketService.js expects
+            document.getElementById('emitName').value = 'join_room'; 
+            document.getElementById('emitData').value = JSON.stringify({ room: 'admin_notifications' }, null, 2);
+        }
+
+        function fillJoinProduct() {
+            const pid = prompt("Enter Product ID to watch:", "123");
+            if(pid) {
+                // NOTE: Based on your backend logic (joinProductRooms), 
+                // you likely have a socket event listener that calls this.
+                document.getElementById('emitName').value = 'watch_product'; 
+                document.getElementById('emitData').value = JSON.stringify({ productId: pid }, null, 2);
+            }
+        }
+
+    </script>
+</body>
+</html>

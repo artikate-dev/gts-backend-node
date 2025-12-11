@@ -1,0 +1,187 @@
+name: ⏪ Manual Rollback & History
+
+on:
+  workflow_dispatch:
+    inputs:
+      action_mode:
+        description: 'Action Mode'
+        required: true
+        default: '🔍 List Available Images'
+        type: choice
+        options:
+        - '🔍 List Available Images'
+        - '🚀 Execute Rollback'
+      target_env:
+        description: 'Target Environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - production
+      image_tag:
+        description: 'Commit SHA (Required for Rollback only)'
+        required: false
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REGISTRY: 767397940350.dkr.ecr.ap-south-1.amazonaws.com
+  ECR_REPOSITORY: gts/node-service 
+  CONTAINER_NAME: gts-node-container
+  APP_NAME: GTS- Node API
+  IAM_ROLE_ARN: arn:aws:iam::767397940350:role/gts-node-service-git-deploy-role
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ==========================================
+  # JOB 1: LIST IMAGES
+  # ==========================================
+  list-images:
+    if: ${{ inputs.action_mode == '🔍 List Available Images' }}
+    name: List Deployable Images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 50 
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.IAM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Fetch ECR Images and Git Info
+        id: list-images
+        run: |
+          echo "Fetching images from ECR..."
+          
+          # Get last 10 images, sorted by date pushed (newest at bottom), get their tags
+          # We filter for tags that are 7 chars long (SHAs) to avoid 'latest' or 'dev' tags
+          RAW_TAGS=$(aws ecr describe-images \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
+            --query 'sort_by(imageDetails, &imagePushedAt)[-20:].imageTags[*]' \
+            --output json)
+
+          echo "### 📦 Available Rollback Images (${{ inputs.target_env }})" >> $GITHUB_STEP_SUMMARY
+          echo "Copy the **Commit SHA** below and re-run this workflow in 'Execute Rollback' mode." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit SHA | Date Pushed (ECR) | Git Commit Message |" >> $GITHUB_STEP_SUMMARY
+          echo "| :--- | :--- | :--- |" >> $GITHUB_STEP_SUMMARY
+
+          # Loop through tags and match with git log
+          # Note: This is a simplified loop. It iterates strictly through ECR images.
+          
+          aws ecr describe-images --repository-name ${{ env.ECR_REPOSITORY }} \
+          --query 'sort_by(imageDetails, &imagePushedAt)[-20:]' --output json | jq -c '.[]' | while read i; do
+            
+            # Extract tags and timestamp
+            TAGS=$(echo $i | jq -r '.imageTags[]')
+            TS=$(echo $i | jq -r '.imagePushedAt')
+            
+            # Find the SHA tag (assuming 7 chars)
+            SHA_TAG=""
+            for tag in $TAGS; do
+              if [[ ${#tag} -eq 7 ]]; then
+                SHA_TAG=$tag
+                break
+              fi
+            done
+
+            if [[ ! -z "$SHA_TAG" ]]; then
+              # Get Git Message for this SHA
+              MSG=$(git log -1 --format="%s" $SHA_TAG 2>/dev/null || echo "⚠️ Commit not found in recent history")
+              DATE=$(date -d @$TS "+%Y-%m-%d %H:%M")
+              
+              echo "| \`$SHA_TAG\` | $DATE | $MSG |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+  # ==========================================
+  # JOB 2: EXECUTE ROLLBACK (Actual Deploy)
+  # ==========================================
+  rollback:
+    if: ${{ inputs.action_mode == '🚀 Execute Rollback' }}
+    name: Rollback Deployment
+    runs-on: ubuntu-latest
+    environment: 
+      name: ${{ inputs.target_env }}
+
+    steps:
+      - name: Validate Input
+        run: |
+          if [ -z "${{ inputs.image_tag }}" ]; then
+            echo "::error::You selected 'Execute Rollback' but did not provide an Image Tag!"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set Environment Variables
+        id: set-env
+        run: |
+          if [ "${{ inputs.target_env }}" == "production" ]; then
+            echo "ECS_CLUSTER_NAME=gts-prod-cluster" >> $GITHUB_OUTPUT
+            echo "ECS_SERVICE_NAME=gts-node-service-main" >> $GITHUB_OUTPUT
+            echo "ECS_TASK_DEFINITION=node-task-definition.json" >> $GITHUB_OUTPUT
+            echo "NODE_ENV_VAL=production" >> $GITHUB_OUTPUT
+          else
+            echo "ECS_CLUSTER_NAME=gts-dev-cluster" >> $GITHUB_OUTPUT    
+            echo "ECS_SERVICE_NAME=gts-node-service-dev" >> $GITHUB_OUTPUT 
+            echo "ECS_TASK_DEFINITION=task-definition/dev-task-def.json" >> $GITHUB_OUTPUT
+            echo "NODE_ENV_VAL=development" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.IAM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify Image Exists in ECR
+        id: check-image
+        run: |
+          aws ecr describe-images --repository-name ${{ env.ECR_REPOSITORY }} --image-ids imageTag=${{ inputs.image_tag }} || (echo "::error::Image tag ${{ inputs.image_tag }} not found in ECR!" && exit 1)
+          echo "Image found. Proceeding with rollback."
+
+      - name: Render new task definition
+        id: render-task
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ steps.set-env.outputs.ECS_TASK_DEFINITION }}
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ inputs.image_tag }}
+          
+          environment-variables: |
+            NODE_ENV=${{ steps.set-env.outputs.NODE_ENV_VAL }}
+            PORT=3000
+            DB_HOST=${{ secrets.DB_HOST }}
+            DB_USER=${{ secrets.DB_USER }}
+            DB_PASS=${{ secrets.DB_PASS }}
+            DB_NAME=${{ secrets.DB_NAME }}
+            DB_PORT=${{ secrets.DB_PORT }}
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            REDIS_CART_URL=${{ secrets.REDIS_CART_URL }}
+            REDIS_INVENTORY_URL=${{ secrets.REDIS_INVENTORY_URL }}
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.render-task.outputs.task-definition }}
+          service: ${{ steps.set-env.outputs.ECS_SERVICE_NAME }}
+          cluster: ${{ steps.set-env.outputs.ECS_CLUSTER_NAME }}
+          wait-for-service-stability: true
+
+      - name: Notify Slack of Rollback
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+           curl -X POST -H 'Content-type: application/json' --data '{
+             "text": "🚨 *ROLLBACK INITIATED* 🚨\nService: *${{ env.APP_NAME }}*\nEnvironment: *${{ inputs.target_env }}*\nRolled back to Commit SHA: *${{ inputs.image_tag }}*"
+           }' "$SLACK_WEBHOOK_URL"

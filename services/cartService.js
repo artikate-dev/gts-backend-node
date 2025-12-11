@@ -65,7 +65,14 @@ class CartService {
     }
 
     async getCart(userId, guestId) {
-        const key = this._getKey(userId, guestId);
+        let key;
+        if(userId && guestId){
+            await this.mergeCarts(guestId, userId);
+            key = `cart:user:${userId}`
+        }
+        else{
+            key = this._getKey(userId, guestId);
+        }
         const rawCart = await this.cartRedis.hgetall(key);
         
         if (Object.keys(rawCart).length === 0) {
