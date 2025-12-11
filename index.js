@@ -84,6 +84,12 @@ app.use((req, res, next) => {
   next();
 });
 
+const validateIdentifiers = require('./middlewares/validateIds');
+app.use(validateIdentifiers);
+
+app.get('/debug', (req, res) => {
+    res.sendFile(path.join(__dirname, 'views/debug.html'));
+});
 
 app.use('/cart/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 

@@ -46,17 +46,3 @@ exports.removeItem = async (req, res, next) => {
     next(error);
   }
 };
-
-exports.mergeCarts = async (req, res, next) => {
-  try {
-    const { userId, guestId } = getIdentifiers(req);
-    if (!userId || !guestId) {
-      return res.status(400).json({ error: 'userId and guestId are required for merge.' });
-    }
-    const cartService = new CartService(req.redis, req.inventoryRedis, req.io);
-    const mergedCart = await cartService.mergeCarts(guestId, userId);
-    res.status(200).json(mergedCart);
-  } catch (error) {
-    next(error);
-  }
-};

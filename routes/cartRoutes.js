@@ -10,88 +10,6 @@ const cartController = require('../controllers/cartController');
 
 /**
  * @swagger
- * components:
- *   schemas:
- *     CartItemInput:
- *       type: object
- *       required:
- *         - productId
- *         - qty
- *       properties:
- *         productId:
- *           type: string
- *           description: The unique identifier of the product.
- *         qty:
- *           type: integer
- *           description: The quantity of the product in the cart.
- *           minimum: 1
- *     CartItem:
- *       type: object
- *       properties:
- *         productId:
- *           type: string
- *         sku:
- *           type: string
- *         name:
- *           type: string
- *         slug:
- *           type: string
- *         image:
- *           type: string
- *           format: uri
- *         regular_price:
- *           type: string
- *           description: The regular price of a single item.
- *           example: "19.99"
- *         sale_price:
- *           type: string
- *           description: The sale price of a single item.
- *           example: "19.99"
- *         qty:
- *           type: integer
- *         attributes:
- *           type: object
- *           additionalProperties: true
- *           description: Product attributes like size or color.
- *         updatedAt:
- *           type: string
- *           format: date-time
- *         message:
- *           type: string
- *           description: A message related to the item, e.g., if quantity was adjusted.
- *         max_stock:
- *           type: integer
- *           description: The maximum available stock for this item.
- *     Cart:
- *       type: object
- *       properties:
- *         cart:
- *           type: array
- *           items:
- *             $ref: '#/components/schemas/CartItem'
- *         messages:
- *           type: array
- *           items:
- *             type: object
- *             properties:
- *               type:
- *                 type: string
- *                 enum: [error, warning, info]
- *               text:
- *                 type: string
- *     Error:
- *       type: object
- *       properties:
- *         error:
- *           type: string
- *           description: A short error description.
- *         details:
- *           type: string
- *           description: A more detailed error message.
- */
-
-/**
- * @swagger
  * /cart:
  *   get:
  *     summary: Retrieve the user's shopping cart
@@ -214,40 +132,5 @@ router.post('/', cartController.upsertItem);
  *         description: Internal Server Error.
  */
 router.delete('/:productId', cartController.removeItem);
-
-/**
- * @swagger
- * /cart/merge:
- *   post:
- *     summary: Merge a guest cart with a user's cart
- *     tags: [Cart]
- *     description: Merges a temporary guest cart into the authenticated user's cart upon login.
- *     parameters:
- *       - in: query
- *         name: userId
- *         schema:
- *           type: string
- *           format: uuid
- *         required: false
- *         description: The authenticated user's ID. When provided, returns the cart for this user.
- *       - in: query
- *         name: guestId
- *         schema:
- *           type: string
- *         required: false
- *         description: The guest identifier (for anonymous carts). Used when no userId is present.
- *     responses:
- *       200:
- *         description: The merged and updated cart.
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Cart'
- *       400:
- *         description: Bad Request (e.g., invalid guest cart ID).
- *       500:
- *         description: Internal Server Error.
- */
-router.post('/merge',cartController.mergeCarts);
 
 module.exports = router;
