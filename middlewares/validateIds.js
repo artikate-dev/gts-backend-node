@@ -1,6 +1,6 @@
-const { validate: isUuid } = require('uuid');
+const validateAndAttachIdentity = async (req, res, next) => {
+    const { validate: isUuid } = await import('uuid');
 
-const validateAndAttachIdentity = (req, res, next) => {
     const guestId = req.headers['x-guest-id'] || req.query.guestId || null;
     const userId = req.headers['x-user-id'] || req.query.userId || null;
 
